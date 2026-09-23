@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HELIOS — Solar System Simulation</title>
+<style>
+  :root{color-scheme:dark;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:#03040a;overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif;}
+  #canvas{display:block;background:radial-gradient(ellipse at center,#0a0e1f 0%,#03040a 70%);cursor:grab;touch-action:none;}
+  #canvas.dragging{cursor:grabbing;}
+  .panel{position:fixed;background:rgba(10,14,28,.85);backdrop-filter:blur(8px);border:1px solid rgba(120,150,255,.2);border-radius:10px;color:#cfd8ff;font-size:13px;}
+  #controls{top:12px;left:12px;padding:12px 14px;display:flex;flex-direction:column;gap:7px;max-width:230px;max-height:92vh;overflow-y:auto;}
+  #controls h1{font-size:16px;letter-spacing:2px;color:#fff;}
+  #controls .sub{font-size:10px;color:#8890c0;margin-bottom:2px;}
+  #date-readout{font-size:11px;color:#9fb0ff;font-variant-numeric:tabular-nums;background:rgba(80,100,200,.15);border-radius:5px;padding:4px 7px;}
+  .row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+  button{background:#1a2140;border:1px solid #3a4680;color:#dde2ff;border-radius:6px;padding:5px 9px;font-size:11px;cursor:pointer;}
+  button:hover{background:#2a3568;}
+  button.active{background:#4a5adf;border-color:#6a7aff;}
+  input[type=range]{flex:1;accent-color:#6a7aff;}
+  .divider{height:1px;background:rgba(120,150,255,.15);margin:2px 0;}
+  .label{font-size:10px;color:#7a82b0;text-transform:uppercase;letter-spacing:1px;margin-top:2px;}
+  #jump{display:flex;flex-wrap:wrap;gap:4px;}
+  #jump button{flex:1 1 30%;padding:4px 2px;font-size:10px;}
+  #info{top:12px;right:12px;padding:14px 16px;width:220px;display:none;}
+  #info h2{font-size:15px;color:#fff;margin-bottom:6px;}
+  #info .stat{display:flex;justify-content:space-between;font-size:11px;color:#a8b0e0;margin:3px 0;}
+  #info .stat b{color:#e0e4ff;font-weight:600;}
+  #info .moonlist{margin-top:6px;font-size:10px;color:#8890c0;}
+  #hint{bottom:10px;left:50%;transform:translateX(-50%);padding:6px 12px;font-size:10px;color:#7a82b0;white-space:nowrap;}
+  #speed-label{font-size:10px;color:#8890c0;min-width:56px;text-align:right;}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div class="panel" id="controls">
+  <h1>☉ HELIOS</h1>
+  <div class="sub">Interactive Solar System</div>
+  <div id="date-readout">— </div>
+  <div class="row">
+    <button id="playBtn">⏸ Pause</button>
+    <span id="speed-label">1.0×</span>
+  </div>
+  <input type="range" id="speedSlider" min="-2" max="4.3" step="0.1" value="1">
+  <div class="row">
+    <button id="orbitsBtn" class="active">Orbits</button>
+    <button id="labelsBtn" class="active">Labels</button>
+    <button id="trueScaleBtn">True Scale</button>
+  </div>
+  <div class="row">
+    <button id="trailsBtn" class="active">Trails</button>
+    <button id="moonsBtn" class="active">Moons</button>
+    <button id="beltBtn" class="active">Belt</button>
+    <button id="cometBtn" class="active">Comet</button>
+  </div>
+  <div class="row">
+    <button id="zoomOut">−</button>
+    <button id="zoomReset">Reset</button>
+    <button id="zoomIn">+</button>
+  </div>
+  <div class="label">Jump to</div>
+  <div id="jump"></div>
+</div>
+
+<div class="panel" id="info">
+  <h2 id="info-name">—</h2>
+  <div class="stat"><span>Distance from Sun</span><b id="info-dist">—</b></div>
+  <div class="stat"><span>Diameter</span><b id="info-diam">—</b></div>
+  <div class="stat"><span>Orbital Period</span><b id="info-period">—</b></div>
+  <div class="stat"><span>Rotation</span><b id="info-rot">—</b></div>
+  <div class="stat"><span>Moons (known)</span><b id="info-moons">—</b></div>
+  <div class="moonlist" id="info-moonlist"></div>
+</div>
+
+<div class="panel" id="hint">drag to pan · scroll/pinch to zoom · click a body · space = pause</div>
+
+<script>
+(function(){
+"use strict";
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let W,H,DPR=Math.min(window.devicePixelRatio||1,2);
+function resize(){
+  W=window.innerWidth; H=window.innerHeight;
+  canvas.width=W*DPR; canvas.height=H*DPR;
+  canvas.style.width=W+'px'; canvas.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize',resize); resize();
+
+const SUN_REAL_KM=1392700;
+const PLANETS=[
+ {name:"Mercury",color:"#b7a596",au:0.39,diamKm:4879,  periodDays:88,   rotHrs:1408, moons:[]},
+ {name:"Venus",  color:"#e8cd9a",au:0.72,diamKm:12104, periodDays:225,  rotHrs:-5832,moons:[]},
+ {name:"Earth",  color:"#4a90d9",au:1.00,diamKm:12742, periodDays:365,  rotHrs:24,   moons:[{name:"Moon",color:"#ccc",dist:14,period:27.3,r:2}]},
+ {name:"Mars",   color:"#c1440e",au:1.52,diamKm:6779,  periodDays:687,  rotHrs:24.6, moons:[{name:"Phobos",color:"#998",dist:9,period:0.32,r:1},{name:"Deimos",color:"#aaa",dist:13,period:1.26,r:1}]},
+ {name:"Jupiter",color:"#d8b28a",au:5.20,diamKm:139820,periodDays:4333, rotHrs:9.9,  moons:[{name:"Io",color:"#e8d17a",dist:20,period:1.77,r:2},{name:"Europa",color:"#d6c9b8",dist:25,period:3.55,r:2},{name:"Ganymede",color:"#b7a894",dist:31,period:7.15,r:2.4},{name:"Callisto",color:"#8f8577",dist:37,period:16.7,r:2.2}]},
+ {name:"Saturn", color:"#e3d3a0",au:9.58,diamKm:116460,periodDays:10759,rotHrs:10.7, moons:[{name:"Titan",color:"#e0b45a",dist:26,period:15.9,r:2.4}], ring:true},
+ {name:"Uranus", color:"#9fd6e0",au:19.2,diamKm:50724, periodDays:30687,rotHrs:-17.2,moons:[{name:"Titania",color:"#bcd",dist:16,period:8.7,r:1.6}]},
+ {name:"Neptune",color:"#4166f5",au:30.05,diamKm:49244,periodDays:60190,rotHrs:16.1, moons:[{name:"Triton",color:"#cde",dist:16,period:-5.9,r:1.8}]}
+];
+const COMET={name:"Halley-type Comet",a:17.8,e:0.85,periodDays:27500,color:"#dff"};
+
+function orbitPixels(au, trueScale){ return trueScale ? 30+au*32 : 55+Math.pow(au,0.55)*120; }
+function planetPixelRadius(diamKm, trueScale){ return trueScale ? Math.max(1,(diamKm/SUN_REAL_KM)*26) : Math.max(4,5+Math.log10(diamKm)*3.2); }
+
+let trueScale=false, showOrbits=true, showLabels=true, showTrails=true, showMoons=true, showBelt=true, showComet=true, playing=true;
+let simSpeed=1, time=0, camX=0, camY=0, zoom=1, selected=null;
+
+const state = PLANETS.map(p=>({...p, angle:Math.random()*Math.PI*2, rot:0, trail:[], moons:p.moons.map(m=>({...m,angle:Math.random()*Math.PI*2}))}));
+const comet={...COMET, angle:Math.random()*Math.PI*2, trail:[]};
+const belt=Array.from({length:260},()=>({
+  a: 2.1+Math.random()*0.9,
+  angle: Math.random()*Math.PI*2,
+  speed: 0.15+Math.random()*0.1,
+  size: 0.5+Math.random()*1.2
+}));
+
+const startDate = new Date();
+function fmtDate(days){
+  const d=new Date(startDate.getTime()+days*86400000);
+  return d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
+}
+
+// jump buttons
+const jumpEl=document.getElementById('jump');
+state.forEach(p=>{
+  const b=document.createElement('button');
+  b.textContent=p.name; b.onclick=()=>{selected=p; updateInfoPanel();};
+  jumpEl.appendChild(b);
+});
+
+// interaction (mouse drag + wheel zoom, and touch drag + pinch zoom)
+let dragging=false,lastX=0,lastY=0;
+const pointers=new Map();
+let pinchStartDist=null, pinchStartZoom=1;
+
+canvas.addEventListener('pointerdown',e=>{
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pointers.size===1){
+    dragging=true; lastX=e.clientX; lastY=e.clientY; canvas.classList.add('dragging');
+  } else if(pointers.size===2){
+    dragging=false;
+    const pts=[...pointers.values()];
+    pinchStartDist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+    pinchStartZoom=zoom;
+  }
+});
+window.addEventListener('pointermove',e=>{
+  if(!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pointers.size===2 && pinchStartDist){
+    const pts=[...pointers.values()];
+    const dist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+    zoom=Math.min(9,Math.max(0.15,pinchStartZoom*(dist/pinchStartDist)));
+  } else if(dragging && pointers.size===1){
+    camX+=(e.clientX-lastX)/zoom; camY+=(e.clientY-lastY)/zoom; lastX=e.clientX; lastY=e.clientY;
+  }
+});
+function releasePointer(e){
+  pointers.delete(e.pointerId);
+  if(pointers.size===0){ dragging=false; canvas.classList.remove('dragging'); pinchStartDist=null; }
+  else if(pointers.size===1){ pinchStartDist=null; const pt=[...pointers.values()][0]; dragging=true; lastX=pt.x; lastY=pt.y; }
+}
+window.addEventListener('pointerup',releasePointer);
+window.addEventListener('pointercancel',releasePointer);
+canvas.addEventListener('wheel',e=>{ e.preventDefault(); zoom=Math.min(9,Math.max(0.15,zoom*(e.deltaY<0?1.1:0.9))); },{passive:false});
+canvas.addEventListener('click',e=>{
+  const rect=canvas.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  const cx=W/2+camX*zoom, cy=H/2+camY*zoom;
+  let hit=null,best=1e9;
+  for(const p of state){
+    const r=orbitPixels(p.au,trueScale)*zoom;
+    const x=cx+Math.cos(p.angle)*r, y=cy+Math.sin(p.angle)*r*0.55;
+    const d=Math.hypot(mx-x,my-y);
+    const hitR=Math.max(10,planetPixelRadius(p.diamKm,trueScale)*zoom);
+    if(d<hitR&&d<best){best=d;hit=p;}
+  }
+  selected=hit; updateInfoPanel();
+});
+window.addEventListener('keydown',e=>{
+  if(e.code==='Space'){e.preventDefault(); togglePlay();}
+  else if(e.key==='+'||e.key==='=') zoom=Math.min(9,zoom*1.2);
+  else if(e.key==='-') zoom=Math.max(0.15,zoom/1.2);
+  else if(e.key==='ArrowRight') speedSlider.value=Math.min(4.3,parseFloat(speedSlider.value)+0.3), updateSpeedLabel();
+  else if(e.key==='ArrowLeft') speedSlider.value=Math.max(-2,parseFloat(speedSlider.value)-0.3), updateSpeedLabel();
+});
+
+const playBtn=document.getElementById('playBtn');
+function togglePlay(){ playing=!playing; playBtn.textContent=playing?'⏸ Pause':'▶ Play'; }
+playBtn.onclick=togglePlay;
+const speedSlider=document.getElementById('speedSlider');
+const speedLabel=document.getElementById('speed-label');
+function updateSpeedLabel(){ const v=Math.pow(10,parseFloat(speedSlider.value)); simSpeed=v; speedLabel.textContent=(v<1?v.toFixed(2):v.toFixed(1))+'×'; }
+speedSlider.oninput=updateSpeedLabel; updateSpeedLabel();
+
+function toggle(id,setter,getter){ document.getElementById(id).onclick=function(){ setter(!getter()); this.classList.toggle('active',getter()); }; }
+document.getElementById('orbitsBtn').onclick=function(){showOrbits=!showOrbits;this.classList.toggle('active',showOrbits);};
+document.getElementById('labelsBtn').onclick=function(){showLabels=!showLabels;this.classList.toggle('active',showLabels);};
+document.getElementById('trueScaleBtn').onclick=function(){trueScale=!trueScale;this.classList.toggle('active',trueScale);};
+document.getElementById('trailsBtn').onclick=function(){showTrails=!showTrails;this.classList.toggle('active',showTrails); state.forEach(p=>p.trail=[]); comet.trail=[];};
+document.getElementById('moonsBtn').onclick=function(){showMoons=!showMoons;this.classList.toggle('active',showMoons);};
+document.getElementById('beltBtn').onclick=function(){showBelt=!showBelt;this.classList.toggle('active',showBelt);};
+document.getElementById('cometBtn').onclick=function(){showComet=!showComet;this.classList.toggle('active',showComet);};
+document.getElementById('zoomIn').onclick=()=>zoom=Math.min(9,zoom*1.3);
+document.getElementById('zoomOut').onclick=()=>zoom=Math.max(0.15,zoom/1.3);
+document.getElementById('zoomReset').onclick=()=>{zoom=1;camX=0;camY=0;};
+
+function updateInfoPanel(){
+  const panel=document.getElementById('info');
+  if(!selected){panel.style.display='none';return;}
+  panel.style.display='block';
+  document.getElementById('info-name').textContent=selected.name;
+  document.getElementById('info-dist').textContent=selected.au.toFixed(2)+' AU';
+  document.getElementById('info-diam').textContent=selected.diamKm.toLocaleString()+' km';
+  document.getElementById('info-period').textContent=selected.periodDays.toLocaleString()+' days';
+  document.getElementById('info-rot').textContent=(Math.abs(selected.rotHrs)<48?Math.abs(selected.rotHrs).toFixed(1)+' hrs':(Math.abs(selected.rotHrs)/24).toFixed(1)+' days')+(selected.rotHrs<0?' (retrograde)':'');
+  document.getElementById('info-moons').textContent=selected.moons.length;
+  document.getElementById('info-moonlist').textContent=selected.moons.map(m=>m.name).join(', ');
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  const cx=W/2+camX*zoom, cy=H/2+camY*zoom;
+
+  ctx.fillStyle='#fff';
+  for(let i=0;i<160;i++){ const sx=(i*97.3)%W, sy=(i*53.7+(i*i)%37)%H; ctx.globalAlpha=0.12+((i*13)%10)/40; ctx.fillRect(sx,sy,1,1); }
+  ctx.globalAlpha=1;
+
+  if(showOrbits){
+    ctx.strokeStyle='rgba(120,150,255,0.16)'; ctx.lineWidth=1;
+    for(const p of state){ const r=orbitPixels(p.au,trueScale)*zoom; ctx.beginPath(); ctx.ellipse(cx,cy,r,r*0.55,0,0,Math.PI*2); ctx.stroke(); }
+  }
+
+  if(showBelt){
+    ctx.fillStyle='rgba(190,170,140,0.55)';
+    for(const a of belt){
+      if(playing) a.angle += (simSpeed*a.speed)*0.01;
+      const r=orbitPixels(a.a,trueScale)*zoom;
+      const x=cx+Math.cos(a.angle)*r, y=cy+Math.sin(a.angle)*r*0.55;
+      ctx.fillRect(x,y,a.size*Math.max(0.6,zoom*0.6),a.size*Math.max(0.6,zoom*0.6));
+    }
+  }
+
+  if(showComet){
+    if(playing) comet.angle += (simSpeed/comet.periodDays)*0.6;
+    const r=comet.a*(1-comet.e*comet.e)/(1+comet.e*Math.cos(comet.angle));
+    const rp=orbitPixels(r,trueScale)*zoom;
+    const x=cx+Math.cos(comet.angle)*rp, y=cy+Math.sin(comet.angle)*rp*0.55;
+    if(showTrails){ comet.trail.push({x,y}); if(comet.trail.length>60) comet.trail.shift(); }
+    if(comet.trail.length>1){
+      ctx.strokeStyle='rgba(180,230,255,0.35)'; ctx.lineWidth=1.5;
+      ctx.beginPath(); comet.trail.forEach((pt,i)=>i?ctx.lineTo(pt.x,pt.y):ctx.moveTo(pt.x,pt.y)); ctx.stroke();
+    }
+    ctx.fillStyle='#dff'; ctx.beginPath(); ctx.arc(x,y,Math.max(2,2.5*zoom),0,Math.PI*2); ctx.fill();
+    if(showLabels && zoom>0.4){ ctx.fillStyle='rgba(200,230,255,0.8)'; ctx.font='10px system-ui'; ctx.textAlign='center'; ctx.fillText('Comet',x,y-10); }
+  }
+
+  const sunR=(trueScale?26:16)*zoom;
+  const grad=ctx.createRadialGradient(cx,cy,0,cx,cy,sunR*2);
+  grad.addColorStop(0,'#fff7cc'); grad.addColorStop(0.4,'#ffcf4a'); grad.addColorStop(1,'rgba(255,150,20,0)');
+  ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(cx,cy,sunR*2,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#fff2b0'; ctx.beginPath(); ctx.arc(cx,cy,sunR,0,Math.PI*2); ctx.fill();
+
+  for(const p of state){
+    if(playing){ p.angle += (simSpeed/p.periodDays)*0.6; p.rot += (simSpeed/(p.rotHrs/24))*0.6; }
+    const r=orbitPixels(p.au,trueScale)*zoom;
+    const x=cx+Math.cos(p.angle)*r, y=cy+Math.sin(p.angle)*r*0.55;
+    const pr=Math.max(2,planetPixelRadius(p.diamKm,trueScale)*zoom);
+
+    if(showTrails){ p.trail.push({x,y}); if(p.trail.length>90) p.trail.shift();
+      if(p.trail.length>1){ ctx.strokeStyle=p.color+'55'; ctx.lineWidth=1; ctx.beginPath(); p.trail.forEach((pt,i)=>i?ctx.lineTo(pt.x,pt.y):ctx.moveTo(pt.x,pt.y)); ctx.stroke(); }
+    }
+
+    if(p.ring){ ctx.strokeStyle='rgba(220,200,160,0.6)'; ctx.lineWidth=Math.max(1,pr*0.35);
+      ctx.beginPath(); ctx.ellipse(x,y,pr*2,pr*0.7,0.4,0,Math.PI*2); ctx.stroke(); }
+
+    ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(x,y,pr,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='rgba(0,0,0,0.35)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x-Math.sin(p.rot)*pr*1.3,y-Math.cos(p.rot)*pr*1.3); ctx.lineTo(x+Math.sin(p.rot)*pr*1.3,y+Math.cos(p.rot)*pr*1.3); ctx.stroke();
+
+    if(showMoons){
+      for(const m of p.moons){
+        if(playing) m.angle += (simSpeed/m.period)*0.6;
+        const mr=m.dist*Math.max(0.55,zoom*0.55)+pr+3;
+        const mx=x+Math.cos(m.angle)*mr, my=y+Math.sin(m.angle)*mr*0.6;
+        ctx.fillStyle=m.color; ctx.beginPath(); ctx.arc(mx,my,Math.max(1,m.r*zoom*0.6),0,Math.PI*2); ctx.fill();
+      }
+    }
+
+    if(selected===p){ ctx.strokeStyle='#8fa0ff'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(x,y,pr+5,0,Math.PI*2); ctx.stroke(); }
+
+    if(showLabels && zoom>0.3){ ctx.fillStyle='rgba(220,225,255,0.85)'; ctx.font='11px system-ui, sans-serif'; ctx.textAlign='center'; ctx.fillText(p.name,x,y-pr-8); }
+  }
+
+  if(playing) time += simSpeed*0.6;
+  document.getElementById('date-readout').textContent=fmtDate(time);
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>
